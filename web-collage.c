@@ -1,12 +1,7 @@
-/* NOTE: To get long kerberos tickets, use:
-   kinit -l 1275m $user
-   fsid -a */
-
-/* Convert from wget to nc */
-
 #include <stdio.h>
 #include <string.h>
 #include <sys/types.h>
+#include <sys/stat.h>
 #include <signal.h>
 #include <time.h>
 #include <unistd.h>
@@ -14,11 +9,12 @@
 #include <errno.h>
 
 #define WGET_PATH "/usr/bin/wget"
-#define TMP_DIR "/home/.cantilever/jrising/tmp/progs/"
-#define LOG_FILE TMP_DIR "wslog.txt"
-#define FILES_DIR TMP_DIR "files/"
+#define FILES_DIR "/home/jrising/tmp/web-collage/%s/"
+#define LOG_FILE FILES_DIR "wslog.txt"
 #define COLLECT_CMD WGET_PATH " -H -nd -T2 -Q50000 -o " LOG_FILE " -P " FILES_DIR
 #define LS_CMD "ls -1 " FILES_DIR
+#define DAT_FILE "data/%s.dat"
+#define IMG_FILE "data/%s.jpg"
 #define BUFFSIZE 512
 #define NUMLINESIZE 11
 #define DEBUG 0
@@ -28,9 +24,6 @@
 
 #define KEEP_PROB 2
 #define DROP_PROB 2
-
-#define POPULATE_URL "http://www.existencia.org/feeds/collage/grouppicts.html"
-#define POPULATE_PROB 100
 
 #define DISLIKE_CNT 0
 char *dislikes[] = {};
@@ -58,6 +51,7 @@ char *strcasestr(char *s1, char *s2);
 int findlikes(FILE *fp);
 
 int main(int argc, char *argv[]) {
+  char logfile[BUFFSIZE], filesdir[BUFFSIZE], collectcmd[BUFFSIZE], lscmd[BUFFSIZE], datfile[BUFFSIZE], imgfile[BUFFSIZE];
   FILE *master, *page;
   FILE *sysout;
   char pageline[BUFFSIZE], buff[BUFFSIZE], scmd[BUFFSIZE], pagefile[BUFFSIZE];
@@ -72,24 +66,32 @@ int main(int argc, char *argv[]) {
   int p;
   int firstentry;
 
-  if (argc != 3) {
+  if (argc != 3 && argc != 4) {
     printf("Usage: web-collage <file> <program>\n");
     exit(-2);
   }
 
+  /* Fill out the commands with name */
+  sprintf(logfile, LOG_FILE, argv[1]);
+  sprintf(filesdir, FILES_DIR, argv[1]);
+  sprintf(collectcmd, COLLECT_CMD, argv[1], argv[1]);
+  sprintf(lscmd, LS_CMD, argv[1]);
+  sprintf(datfile, DAT_FILE, argv[1]);
+  sprintf(imgfile, IMG_FILE, argv[1]);
+  /* does the temp directory already exist? */
+  mkdir(filesdir, S_IRWXU);
+
   /* Open File */
-  if (!(master = fopen(argv[1], "r"))) {
+  if (!(master = fopen(datfile, "r"))) {
     printf("Creating File...\n");
-    printf("Initial URL: ");
-    scanf("%s", buff);
     
-    master = fopen(argv[1], "w+");
+    master = fopen(datfile, "w+");
     if (!master) {
       perror("creating master file");
       exit(-1);
     }
 
-    fprintf(master, "%s\n", buff); /* First URL */
+    fprintf(master, "%s\n", argv[3]); /* First URL */
     fclose(master);
   } else
     fclose(master);
@@ -98,45 +100,43 @@ int main(int argc, char *argv[]) {
 
   srand48(time(NULL));
 
-  master = waitreadmaster(argv[1], 0, 0, 0); /* READ Lock! */
+  master = waitreadmaster(datfile, 0, 0, 0); /* READ Lock! */
   fseek(master, 0, SEEK_END);
   masterlength = ftell(master);
-  freemaster(argv[1], master, 0, 0);      /* Unlock! */
+  freemaster(datfile, master, 0, 0);      /* Unlock! */
 
-  while (1) {
-    if (lrand48() % POPULATE_PROB) {
+  int iter = 0;
+  while (iter++ < 3) {
       /* Get random URL */
       masterloc = lrand48() % masterlength;
       firstentry = 0;
       /* READ Lock! */
-      master = waitreadmaster(argv[1], masterloc, masterloc, BUFFSIZE);
+      master = waitreadmaster(datfile, masterloc, masterloc, BUFFSIZE);
       fgets(pageurl, BUFFSIZE, master); /* skip to line after random char */
       do
-	if (!fgets(pageurl, BUFFSIZE - strlen(COLLECT_CMD) - 1, master)) {
+	if (!fgets(pageurl, BUFFSIZE - strlen(collectcmd) - 1, master)) {
 	  rewind(master);
 	  firstentry = 1;
-	  fgets(pageurl, BUFFSIZE - strlen(COLLECT_CMD) - 1, master);
+	  fgets(pageurl, BUFFSIZE - strlen(collectcmd) - 1, master);
 	}
       while (pageurl[0] == '\t' || pageurl[0] == '\n');
 
       if (!firstentry) {
 	/* Invalidate URL */
 	/* READ->WRITE Lock! */
-	master = waitreadtowrite(argv[1], master, masterloc, BUFFSIZE);
+	master = waitreadtowrite(datfile, master, masterloc, BUFFSIZE);
 	fseek(master, -(strlen(pageurl) + 0), SEEK_CUR);
 	voidline(master);
       }
-      freemaster(argv[1], master, masterloc, BUFFSIZE);
+      freemaster(datfile, master, masterloc, BUFFSIZE);
       /* Unlock! */
 
       pageurl[strlen(pageurl) - 1] = '\0';
-    } else
-      strcpy(pageurl, POPULATE_URL);
 
     printf("\nGetting %s\n", pageurl);
 
     /* Get webpage, checking for any redirection */
-    sprintf(scmd, "%s \"%s\"", COLLECT_CMD, pageurl);
+    sprintf(scmd, "%s \"%s\"", collectcmd, pageurl);
     waitstart = time(NULL);
     if (!(wgetchild = fork())) {
       system(scmd);
@@ -147,7 +147,7 @@ int main(int argc, char *argv[]) {
       kill(wgetchild, 9);
     wait(NULL);
     
-    sysout = fopen(LOG_FILE, "r");
+    sysout = fopen(logfile, "r");
     if (!sysout)
       continue; /* File does not exist */
     while (fgets(buff, BUFFSIZE, sysout)) {
@@ -160,16 +160,16 @@ int main(int argc, char *argv[]) {
     }
     fclose(sysout);
 
-    unlink(LOG_FILE);
+    unlink(logfile);
 
     /* Collect new links */
-    sysout = popen(LS_CMD, "r");
+    sysout = popen(lscmd, "r");
     if (!sysout) {
       perror("searching files directory");
       exit(-3);
     }
 
-    strcpy(pagefile, FILES_DIR);
+    strcpy(pagefile, filesdir);
     if (fgets(pagefile + strlen(pagefile), BUFFSIZE, sysout) != NULL) {
       pagefile[strlen(pagefile) - 1] = '\0';  /* remove newline */
       page = fopen(pagefile, "r");
@@ -203,32 +203,32 @@ int main(int argc, char *argv[]) {
 	      if (strstr(fullurl, dislikes[p])) /* just skip */
 		continue;
 	    /* READ Lock! */
-	    master = waitreadmaster(argv[1], 0, 0, 0);
+	    master = waitreadmaster(datfile, 0, 0, 0);
 	    while (fgets(buff, BUFFSIZE, master)) {
 	      if (!strncmp(buff, fullurl, strlen(fullurl)) ||
 		  (!strncmp(buff, fullurl, strchr(buff + strlen("http://"), '/')
 			    - buff) && !(rand() % HOST_CROWD))) {
 		urldone = 1;
-		freemaster(argv[1], master, 0, 0);
+		freemaster(datfile, master, 0, 0);
 		/* Unlock! */
 		break;
 	      }
 	      if (buff[0] == '\t' || buff[0] == '\n')
 		if (strlen(buff) >= strlen(fullurl) + 1) {
 		  masterloc = ftell(master);
-		  freemaster(argv[1], master, 0, 0);
+		  freemaster(datfile, master, 0, 0);
 		  /* Unlock! */
 		  printf("Adding %s\n", fullurl);
 		  pageadds++;
 		  /* WRITE Lock! */
-		  waitwritemaster(argv[1], masterloc - strlen(buff), 
+		  waitwritemaster(datfile, masterloc - strlen(buff), 
 				  masterloc - strlen(buff), BUFFSIZE);
 		  fprintf(master, "%s\n", fullurl);
 		  if (strlen(buff) >= strlen(fullurl) + 2)
 		    fputc('\t', master);
 		  fseek(master, 0, SEEK_END);
 		  masterlength = ftell(master);
-		  freemaster(argv[1], master,
+		  freemaster(datfile, master,
 			     masterloc - strlen(buff), BUFFSIZE);
 		  /* Unlock! */
 		  urldone = 1;
@@ -242,18 +242,18 @@ int main(int argc, char *argv[]) {
 		urldone = 1;  /* flag that was greater than MAX_SIZE */
 	      }
 	      masterloc = ftell(master);
-	      freemaster(argv[1], master, 0, 0);
+	      freemaster(datfile, master, 0, 0);
 	      /* Unlock! */
 	      printf("Adding %s\n", fullurl);
 	      pageadds++;
 	      /* WRITE Lock! */
-	      waitwritemaster(argv[1], masterloc, masterloc - 2, BUFFSIZE);
+	      waitwritemaster(datfile, masterloc, masterloc - 2, BUFFSIZE);
 	      fprintf(master, "%s\n", fullurl);
 	      if (urldone)
 		voidline(master);
 	      fseek(master, 0, SEEK_END);
 	      masterlength = ftell(master);
-	      freemaster(argv[1], master, masterloc - 2, BUFFSIZE);
+	      freemaster(datfile, master, masterloc - 2, BUFFSIZE);
 	      /* Unlock! */
 	    }
 	  }
@@ -262,12 +262,12 @@ int main(int argc, char *argv[]) {
       fclose(page);
 
       /* Move file to final destination */
-      sprintf(scmd, "%s \"%s\"", argv[2], pagefile);
+      sprintf(scmd, "%s \"%s\" \"%s\"", argv[2], argv[1], pagefile);
       system(scmd);
       sleep(WAIT_TIME);
-      sprintf(scmd, "touch %sREMOVE.tmp", FILES_DIR);
+      sprintf(scmd, "touch %sREMOVE.tmp", filesdir);
       system(scmd);
-      sprintf(scmd, "rm %s*", FILES_DIR);
+      sprintf(scmd, "rm %s*", filesdir);
       system(scmd);
     }
 
