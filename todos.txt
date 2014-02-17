@@ -1,0 +1,6 @@
+TODO:
+	Create webform and mods so can submit url and it handles
+	Make fail gracefully if loses ... whatever loses when logout
+	Figure out something to do with files in tmp/web-collage
+	Make automated running: driven by a page load or cron?
+	Make negative offsets valid (proper + or -, not +-)

@@ -1,0 +1,2 @@
+rm /home/jrising/tmp/web-collage/*
+nice ./web-collage master.dat ./bgcmd
